@@ -5,7 +5,10 @@
 \title{Estimate Fractional Multinomial Logit Models}
 \usage{
 fmlogit(y, X, beta0 = NULL, MLEmethod = "CG", maxit = 5e+05,
-  abstol = 1e-05, cluster = NULL, reps = 1000, ...)
+  abstol = 1e-05, cluster = NULL, reps = 1000,
+  engine = c("RcppNumerical", "maxLik"), fallback_method = "CG",
+  engine_control = list(iterlim = maxit, tol = abstol),
+  engine_verbose = FALSE, ...)
 }
 \arguments{
 \item{y}{the dependent variable (N*J). Can be a matrix or a named data frame.
@@ -18,20 +21,40 @@ automatically added.}
 \item{beta0}{Initial value for beta used in optimization. Uses a 1*K(J-1)
 vector. Default to a vector of zeros.}
 
-\item{MLEmethod}{Method of optimization. Goes into
-\code{maxLik(method=MLEmethod))}. Choose from "NR","BFGS","CG","BHHH","SANN",or "NM".  
-Default to "CG", the conjugate gradients method. See Details.}
+\item{MLEmethod}{Legacy alias for the \code{maxLik} optimization method used
+when \code{engine = "maxLik"}. Choose from "NR", "BFGS", "CG", "BHHH",
+"SANN", or "NM". Default to "CG". See Details.}
 
-\item{maxit}{Maximum number of iteration.}
+\item{maxit}{Maximum number of iterations. Used as the default
+\code{iterlim} in \code{engine_control}.}
 
-\item{abstol}{Tolerence.}
+\item{abstol}{Tolerence. Used as the default \code{tol} in
+\code{engine_control}.}
 
 \item{cluster}{A vector of cluster to be used for clustered standard error computation. 
 Default to NULL, no cluster computed.}
 
 \item{reps}{Numbers of bootstrap replications to be computed for clustered standard errors.}
 
-\item{...}{additional parameters that goes into \code{maxLik()}}
+\item{engine}{Estimation engine. Defaults to the compiled
+\code{RcppNumerical} L-BFGS implementation. Use \code{"maxLik"} to keep
+the legacy \code{maxLik} optimizer path.}
+
+\item{fallback_method}{Optimization method passed to \code{maxLik()} when
+\code{engine = "maxLik"}. Defaults to \code{"CG"}. If omitted, the
+existing \code{MLEmethod} argument is still accepted for backward
+compatibility.}
+
+\item{engine_control}{Optional list of engine controls. Defaults to
+\code{list(iterlim = maxit, tol = abstol)}. The compiled engine also
+accepts \code{eps_g}, and \code{fallback_on_failure = TRUE} can be used to
+retry with \code{maxLik} after a non-zero compiled status.}
+
+\item{engine_verbose}{Logical flag controlling whether the compiled engine
+prints optimizer summaries.}
+
+\item{...}{additional parameters that goes into \code{maxLik()} when
+\code{engine = "maxLik"}}
 }
 \value{
 The function returns an object of class "fmlogit". Use \code{effects}, \code{predict}, 
@@ -91,13 +114,15 @@ the likelihood used here. Robust standard errors are provided following Papke
 and Wooldridge(1996), in which they proposed an asymptotically consistent
 estimator of variance.
 
-Maximization is done by calling \code{\link{maxLik}}. maxLik is a wrapper function 
-for different maximization methods in R. This include most methods provided by \code{\link{maxLik}},  
-but also other methods such as BHHH(Berndt-Hall-Hall-Hausman). 
+By default, optimization uses a compiled \code{RcppNumerical} L-BFGS engine
+for faster estimation. Setting \code{engine = "maxLik"} keeps the legacy
+\code{\link{maxLik}} path, and \code{fallback_method} (or the legacy
+\code{MLEmethod} argument) controls which \code{maxLik} routine is used.
 
-MLE convergence can be a problem in R, especially if dataset is large with many explanatory variables. 
-It is recommended to call CG(Conjugate Gradients) or BHHH(Berndt-Hall-Hall-Hausman).
-Conjugate gradients method is usually faster, but could lead to non-convergence under 
+MLE convergence can still be a problem if the dataset is large with many
+explanatory variables. For the \code{maxLik} engine, it is recommended to
+call CG (Conjugate Gradients) or BHHH (Berndt-Hall-Hall-Hausman). Conjugate
+gradients are usually faster, but could lead to non-convergence under
 certain scenarios. BHHH is slower, but has better convergence performance.
 }
 \examples{

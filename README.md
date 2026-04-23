@@ -45,7 +45,7 @@ The steps involved in calculating the estimator are as follows:
 ## Step 1. Construct the multinomial logit likelihood
 This step is straightforward. A simple multinomial logit transformation will do the job. For detailed derivations and formula, please see the technical document [here](https://github.com/f1kidd/fmlogit/blob/master/Documentation/fmlogit_docs.pdf) where I explain the econometric steps in detail.  
 ## Step 2. Maximize the sum of the log likelihood function
-Generally, R is not the most efficient scientific computing machine that exists, and that is the tradeoff we have to face. Here, the program offers several maximization methods provided in the *maxLik* package. The recommended algorithm is either conjugate gradients (CG), or Berndt-Hall-Hall-Hausman (BHHH). For a large dataset it may take a while (running for one hour is entirely possible, so don't terminate the program prematurely).
+`fmlogit()` now defaults to a compiled `RcppNumerical` L-BFGS engine for faster estimation. Use `engine = "maxLik"` to keep the legacy `maxLik` optimizer, and `fallback_method` (or the legacy `MLEmethod`) to choose the `maxLik` routine such as conjugate gradients (CG) or Berndt-Hall-Hall-Hausman (BHHH).
 ## step 3. Calculate robust standard error
 Here the program follows Papke & Wooldridge (1996), and construcst the robust standard error estimator for the parameters. The program also offers a simple z-test for parameters based on the standard error. 
 
@@ -77,7 +77,6 @@ Papke, L. E. and Wooldridge, J. M. (1996), Econometric methods for fractional re
 Wulff, Jesper N. "Interpreting Results From the Multinomial Logit Model Demonstrated by Foreign Market Entry." Organizational Research Methods (2014): 1094428114560024.
 
 Mullahy, J., 2015. Multivariate fractional regression estimation of econometric share models. Journal of Econometric Methods 4(1), 71-100.
-
 
 
 

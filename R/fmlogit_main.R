@@ -9,15 +9,31 @@
 #'   automatically added.
 #' @param beta0 Initial value for beta used in optimization. Uses a 1*K(J-1)
 #'   vector. Default to a vector of zeros.
-#' @param MLEmethod Method of optimization. Goes into
-#'   \code{maxLik(method=MLEmethod))}. Choose from "NR","BFGS","CG","BHHH","SANN",or "NM".  
-#'   Default to "CG", the conjugate gradients method. See Details. 
-#' @param maxit Maximum number of iteration.
-#' @param abstol Tolerence.
+#' @param MLEmethod Legacy alias for the \code{maxLik} optimization method used
+#'   when \code{engine = "maxLik"}. Choose from "NR", "BFGS", "CG", "BHHH",
+#'   "SANN", or "NM". Default to "CG". See Details.
+#' @param maxit Maximum number of iterations. Used as the default
+#'   \code{iterlim} in \code{engine_control}.
+#' @param abstol Tolerence. Used as the default \code{tol} in
+#'   \code{engine_control}.
 #' @param cluster A vector of cluster to be used for clustered standard error computation. 
 #' Default to NULL, no cluster computed. 
 #' @param reps Numbers of bootstrap replications to be computed for clustered standard errors.
-#' @param ... additional parameters that goes into \code{maxLik()}
+#' @param engine Estimation engine. Defaults to the compiled
+#'   \code{RcppNumerical} L-BFGS implementation. Use \code{"maxLik"} to keep
+#'   the legacy \code{maxLik} optimizer path.
+#' @param fallback_method Optimization method passed to \code{maxLik()} when
+#'   \code{engine = "maxLik"}. Defaults to \code{"CG"}. If omitted, the
+#'   existing \code{MLEmethod} argument is still accepted for backward
+#'   compatibility.
+#' @param engine_control Optional list of engine controls. Defaults to
+#'   \code{list(iterlim = maxit, tol = abstol)}. The compiled engine also
+#'   accepts \code{eps_g}, and \code{fallback_on_failure = TRUE} can be used to
+#'   retry with \code{maxLik} after a non-zero compiled status.
+#' @param engine_verbose Logical flag controlling whether the compiled engine
+#'   prints optimizer summaries.
+#' @param ... additional parameters that goes into \code{maxLik()} when
+#'   \code{engine = "maxLik"}
 #' @return The function returns an object of class "fmlogit". Use \code{effects}, \code{predict}, 
 #'  \code{residual}, \code{fitted} to extract various useful features of the value returned by 
 #' \code{fmlogit}. 
@@ -55,13 +71,15 @@
 #' and Wooldridge(1996), in which they proposed an asymptotically consistent
 #' estimator of variance.
 #' 
-#' Maximization is done by calling \code{\link{maxLik}}. maxLik is a wrapper function 
-#' for different maximization methods in R. This include most methods provided by \code{\link{maxLik}},  
-#' but also other methods such as BHHH(Berndt-Hall-Hall-Hausman). 
+#' By default, optimization uses a compiled \code{RcppNumerical} L-BFGS engine
+#' for faster estimation. Setting \code{engine = "maxLik"} keeps the legacy
+#' \code{\link{maxLik}} path, and \code{fallback_method} (or the legacy
+#' \code{MLEmethod} argument) controls which \code{maxLik} routine is used.
 #' 
-#' MLE convergence can be a problem in R, especially if dataset is large with many explanatory variables. 
-#' It is recommended to call CG(Conjugate Gradients) or BHHH(Berndt-Hall-Hall-Hausman).
-#' Conjugate gradients method is usually faster, but could lead to non-convergence under 
+#' MLE convergence can still be a problem if the dataset is large with many
+#' explanatory variables. For the \code{maxLik} engine, it is recommended to
+#' call CG (Conjugate Gradients) or BHHH (Berndt-Hall-Hall-Hausman). Conjugate
+#' gradients are usually faster, but could lead to non-convergence under
 #' certain scenarios. BHHH is slower, but has better convergence performance.
 #' 
 #' 
@@ -79,7 +97,11 @@
 
 
 fmlogit=function(y, X, beta0 = NULL, MLEmethod = "CG", maxit = 5e+05, 
-                          abstol = 1e-05,cluster=NULL,reps=1000, ...){
+                          abstol = 1e-05,cluster=NULL,reps=1000,
+                          engine = c("RcppNumerical", "maxLik"),
+                          fallback_method = "CG",
+                          engine_control = list(iterlim = maxit, tol = abstol),
+                          engine_verbose = FALSE, ...){
   start.time = proc.time()
   
   if(length(cluster)!=nrow(y) & !is.null(cluster)){
@@ -159,17 +181,43 @@ fmlogit=function(y, X, beta0 = NULL, MLEmethod = "CG", maxit = 5e+05,
     k = k - 1
     collinear = unique(unlist(testcols(X)))
   }
-  QMLE <- function(betas) {
-    betas = matrix(betas, nrow = j - 1, byrow = T)
-    betamat = rbind(rep(0, k + 1), betas)
-    llf = 0
-    for (i in 1:j) {
-      L = y[, i] * ((X %*% betamat[i, ]) - log(rowSums(exp(X %*% 
-                                                             t(betamat)))))
-      llf = llf + sum(L)
-    }
-    return(llf)
-  }
+  engine = match.arg(engine)
+  if (!is.list(engine_control)) 
+    stop("'engine_control' must be a list.")
+  if (!is.logical(engine_verbose) || length(engine_verbose) != 1 || 
+      is.na(engine_verbose)) 
+    stop("'engine_verbose' must be TRUE or FALSE.")
+  if (!missing(fallback_method) && !missing(MLEmethod) && 
+      !identical(fallback_method, MLEmethod)) 
+    warning("Both fallback_method and MLEmethod were supplied. Using fallback_method for engine = \"maxLik\".")
+  maxLik_method = if (missing(fallback_method)) 
+    MLEmethod
+  else fallback_method
+  if (!is.character(maxLik_method) || length(maxLik_method) != 1 || 
+      is.na(maxLik_method)) 
+    stop("'fallback_method' must be a single character string.")
+  engine_control = utils::modifyList(list(iterlim = maxit, tol = abstol), 
+                                     engine_control)
+  if (!is.numeric(engine_control$iterlim) || length(engine_control$iterlim) != 1 || 
+      !is.finite(engine_control$iterlim) || engine_control$iterlim < 1) 
+    stop("'engine_control$iterlim' must be a positive, finite scalar.")
+  if (!is.numeric(engine_control$tol) || length(engine_control$tol) != 1 || 
+      !is.finite(engine_control$tol) || 
+      engine_control$tol < 0) 
+    stop("'engine_control$tol' must be a non-negative, finite scalar.")
+  engine_maxit = as.integer(engine_control$iterlim)
+  engine_tol = as.numeric(engine_control$tol)
+  engine_eps_g = if (is.null(engine_control$eps_g)) 
+    1e-05
+  else as.numeric(engine_control$eps_g)
+  if (!is.numeric(engine_eps_g) || length(engine_eps_g) != 1 || 
+      !is.finite(engine_eps_g) || 
+      engine_eps_g < 0) 
+    stop("'engine_control$eps_g' must be a non-negative, finite scalar.")
+  fallback_on_failure = isTRUE(engine_control$fallback_on_failure)
+  maxLik_control = engine_control
+  maxLik_control$eps_g = NULL
+  maxLik_control$fallback_on_failure = NULL
   QMLE_Obs <- function(betas) {
     betas = matrix(betas, nrow = j - 1, byrow = T)
     betamat = rbind(rep(0, k + 1), betas)
@@ -188,9 +236,40 @@ fmlogit=function(y, X, beta0 = NULL, MLEmethod = "CG", maxit = 5e+05,
     beta0 = rep(0, (k + 1) * (j - 1))
     warning("Wrong length of beta0 given. Use default setting instead.")
   }
-  opt <- maxLik(QMLE_Obs, start = beta0, method = MLEmethod, 
-                control = list(iterlim = maxit, tol = abstol), ...)
-  betamat = matrix(opt$estimate, ncol = k + 1, byrow = T)
+  run_maxLik = function() {
+    maxLik(QMLE_Obs, start = beta0, method = maxLik_method, 
+           control = maxLik_control, ...)
+  }
+  run_RcppNumerical = function() {
+    fast_opt = tryCatch(fmlogit_fast_cpp(X = X, y = y, beta0 = beta0, 
+                                         maxit = engine_maxit, 
+                                         abstol = engine_tol, 
+                                         verbose = engine_verbose, 
+                                         eps_g = engine_eps_g), 
+                        error = function(e) {
+                          warning(paste("RcppNumerical engine failed:", 
+                                        conditionMessage(e), 
+                                        "Falling back to maxLik."))
+                          run_maxLik()
+                        })
+    if (inherits(fast_opt, "maxLik")) 
+      return(fast_opt)
+    if (!is.null(fast_opt$status) && fast_opt$status < 0) {
+      warning("RcppNumerical failed inside the compiled optimizer. Falling back to maxLik.")
+      return(run_maxLik())
+    }
+    if (!is.null(fast_opt$status) && fast_opt$status != 0 && fallback_on_failure) {
+      warning("RcppNumerical returned a non-zero status. Falling back to maxLik.")
+      return(run_maxLik())
+    }
+    list(estimate = as.numeric(fast_opt$estimate), maximum = -fast_opt$fx_opt, 
+         code = fast_opt$status, type = "RcppNumerical L-BFGS", 
+         iterations = fast_opt$niter, message = fast_opt$message)
+  }
+  opt = if (engine == "RcppNumerical") 
+    run_RcppNumerical()
+  else run_maxLik()
+  betamat = matrix(opt$estimate, nrow = j - 1, byrow = T)
   betamat_aug = rbind(rep(0, k + 1), betamat)
   colnames(betamat_aug) = Xnames
   rownames(betamat_aug) = ynames
@@ -317,10 +396,6 @@ fmlogit=function(y, X, beta0 = NULL, MLEmethod = "CG", maxit = 5e+05,
               round(proc.time()[3] - start.time[3], 1), "seconds"))
   return(structure(outlist, class = "fmlogit"))
 }
-
-
-
-
 
 
 
